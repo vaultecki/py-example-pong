@@ -271,6 +271,7 @@ class PongGame(Widget):
             :param msg: consists of ip, port, name, public key, type of connection
             :type msg: dict
         """
+        logger.debug("received multicast msg: {}".format(msg))
         if (not self.is_connected and not msg.get("name", self.pl_name) == self.pl_name and
                 msg.get("type", "error") == self.sd_type):
             # received message from multicast
