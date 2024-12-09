@@ -6,10 +6,14 @@ from kivy.uix.widget import Widget
 from kivy.vector import Vector
 
 import json
+import logging
 import random
 import include.multicast.vault_multicast as helper_multicast
 import include.udp.vault_udp.vault_ip as helper_ip
 import include.udp.vault_udp.vault_udp_socket as helper_udp
+
+
+logger = logging.getLogger(__name__)
 
 
 class PongPaddle(Widget):
@@ -77,7 +81,6 @@ class PongGame(Widget):
                - closes publisher and listener
         """
         super().__init__()
-        self.debug = True
         self.pl_name = "Dave_{}".format(random.randint(1000000, 10000000))
         self.sd_type = "pong"
         self.enemy_name = None
@@ -114,8 +117,8 @@ class PongGame(Widget):
         mc_msg = {"addr": (self.ip, self.port), "name": self.pl_name, "key": self.pub_key, "type": self.sd_type}
         self.publisher = helper_multicast.VaultMultiPublisher(message=json.dumps(mc_msg))
 
-        self.dprint("Welcome {} - let's play pong".format(self.pl_name))
-        self.dprint("multicast started with msg: {}".format(mc_msg))
+        logger.info("Welcome {} - let's play pong".format(self.pl_name))
+        logger.debug("multicast started with msg: {}".format(mc_msg))
 
         # udp receive data event
         self.udp.udp_recv_data.connect(self.on_recv_data)
@@ -148,8 +151,8 @@ class PongGame(Widget):
         self.me.name = "You: {}".format(self.pl_name)
         self.enemy.name = "Enemy: {}".format(self.enemy_name)
 
-        self.dprint("enemy defined")
-        self.dprint("game owner: {}".format(self.game_owner))
+        logger.info("enemy defined")
+        logger.info("game owner: {}".format(self.game_owner))
 
         # key pressed event
         self.keyboard.bind(on_key_down=self.on_keyboard_down)
@@ -210,14 +213,11 @@ class PongGame(Widget):
         try:
             data_dict = json.loads(data)
         except Exception as e:
-            self.dprint(str(e))
-            # if not self.sym_init:
-            #     self.dprint("address: {}".format(addr))
-            #     # self.udp.sym_encryption.update_key(addr=(addr[0], addr[1]), key=self.key)
-            #     self.sym_init = True
+            logger.warning("Warning: {}".format(e))
+            data_dict = {}
 
         # exception handling for not iterable missing
-        self.dprint("data recv {} from {}".format(data.replace("\n", ""), addr))
+        logger.debug("data recv {} from {}".format(data, addr))
         for key, value in data_dict.items():
             if key == "pad_pos":
                 self.enemy.pos = value
@@ -252,7 +252,7 @@ class PongGame(Widget):
                 client_port = value.get("port", addr[1])
                 client_key = value.get("key", "")
                 client_name = value.get("name", "")
-                self.dprint("Enemy {} connected from [{}]:{}".format(client_name, client_ip, client_port))
+                logger.debug("Enemy {} connected from [{}]:{}".format(client_name, client_ip, client_port))
                 self.enemy_name = client_name
 
                 # initialize udp and encryption
@@ -271,7 +271,8 @@ class PongGame(Widget):
             :param msg: consists of ip, port, name, public key, type of connection
             :type msg: dict
         """
-        if not self.is_connected and not msg.get("name", self.pl_name) == self.pl_name and msg.get("type", "error") == self.sd_type:
+        if (not self.is_connected and not msg.get("name", self.pl_name) == self.pl_name and
+                msg.get("type", "error") == self.sd_type):
             # received message from multicast
             server_ip = msg.get("addr")[0]
             server_port = msg.get("addr")[1]
@@ -287,7 +288,7 @@ class PongGame(Widget):
             self.udp.send_data(json.dumps(msg))
 
             # self.udp.sym_encryption.update_key(addr=(server_ip, server_port), key=self.key)
-            self.dprint("found server ip: {}; port: {}; multicast_msg: {}".format(server_ip, server_port, msg))
+            logger.info("found server ip: {}; port: {}; multicast_msg: {}".format(server_ip, server_port, msg))
 
             # initialize game
             self.game_owner = False
@@ -421,17 +422,9 @@ class PongGame(Widget):
         else:
             self.get_root_window().size = self.win_size_pl1
 
-    def dprint(self, text):
-        """Prints given text if debug option is on
-            :param text: text to be printed
-            :type text: str
-        """
-        if self.debug:
-            print(text)
-
     def stop_thread(self, *args):
         """Stop all threads if game is closed"""
-        self.dprint("try to stop")
+        logger.info("try to stop")
         msg = json.dumps({"game_close": True})
         self.udp.send_data(msg)
 
@@ -454,4 +447,6 @@ class PongApp(App):
 
 
 if __name__ == '__main__':
+    logger = logging.getLogger(__name__)
+    logging.basicConfig(level=logging.INFO)
     PongApp().run()
