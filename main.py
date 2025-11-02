@@ -45,12 +45,12 @@ class NetworkManager(EventDispatcher):
         self.udp = helper_udp.UDPSocketClass(recv_port=self.port)
         self.pub_key = self.udp.pkse.public_key
         self.addr_opponent = None
-        self.udp.udp_recv_data.connect(self._handle_udp_data)
 
         # multicast publisher and listener
         self.mc_msg = {"addr": (self.ip, self.port), "name": player_name, "key": self.pub_key, "type": self.sd_type}
         self.publisher = helper_multicast.VaultMultiPublisher()
 
+        self.udp.udp_recv_data.connect(self._handle_udp_data)
 
     def update_opponent_ip(self, addr, key=None):
         self.addr_opponent = addr
@@ -73,7 +73,7 @@ class NetworkManager(EventDispatcher):
         # ... Serialisiert (json.dumps) und sendet Daten über UDP ...
         msg = json.dumps(data)
         logger.info(f"send data: {msg}")
-        self.udp.send_data(msg, self.addr_opponent)
+        self.udp.udp_send_data.emit(msg, self.addr_opponent)
 
     def on_opponent_found(self, *args):
         pass
@@ -113,15 +113,13 @@ class NetworkManager(EventDispatcher):
 
     def _handle_udp_data(self, data, addr):
         # ... verarbeitet eingehende Spieldaten ...
-        print("------------------------")
         logger.info(f"rec data: {data} from {addr}")
         try:
-            data_dict = json.loads(data)
+            data_dict = json.loads(data.decode("utf-8"))
         except Exception as e:
             logger.error(f"problem with json data: {e}")
             return
         for key, value in data_dict.items():
-
             if key == "init":
                 client_ip = value.get("ip", addr[0])
                 client_port = value.get("port", addr[1])
@@ -134,7 +132,7 @@ class NetworkManager(EventDispatcher):
                 return
             if key in ["pad_pos", "ball_vel", "ball_pos"]:
                 self.dispatch("on_game_data_update", {key: value})
-            if key in ["pause win_size", "reset_scores", "game_close"]:
+            if key in ["pause", "win_size", "reset_scores", "game_close"]:
                 self.dispatch("on_game_status_update", {key: value})
                 return
 
@@ -324,9 +322,6 @@ class PongGame(Widget):
                 self.ball.pos = data.get("ball_pos", False)
 
     def on_game_status_update(self, instance, data):
-        if data.get("pause", False):
-            self.set_pause(data.get("pause"))
-            return
         #if key == "win_size":
         #    self.win_size_pl1 = value
         #    self.get_root_window().size = value
@@ -334,6 +329,7 @@ class PongGame(Widget):
         if data.get("reset_scores", False):
             self.player1.score = 0
             self.player2.score = 0
+            self.pause = False
             return
         if data.get("game_close", False):
             self.player1.score = 0
@@ -342,6 +338,8 @@ class PongGame(Widget):
             self.is_connected = False
             self.ball.end_game_text = "enemy left"
             self.network.start_search_for_opponent()
+            return
+        self.set_pause(data.get("pause", False))
 
     def on_game_init(self, instance, data):
         if not self.is_connected:
@@ -470,7 +468,7 @@ class PongGame(Widget):
         if self.player1.score >= 10 or self.player2.score >= 10:
             self.player1.score = 0
             self.player2.score = 0
-            msg = msg | {"reset_scores": True}
+            msg = msg.update({"reset_scores": True})
 
         self.network.send_game_data(msg)
 
