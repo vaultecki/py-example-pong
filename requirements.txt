@@ -4,3 +4,6 @@ PyNewHope>=0.33
 tinyec>=0.4.0
 psutil>=5.9.8
 Kivy>=2.2.0
+msgpack
+pyzstd
+psutil

@@ -9,8 +9,8 @@ import logging
 import json
 import random
 import include.multicast.vault_multicast as helper_multicast
-import include.udp.vault_udp.vault_ip as helper_ip
-import include.udp.vault_udp.vault_udp_socket as helper_udp
+import include.udp as helper_ip
+import include.udp as helper_udp
 
 from kivy.event import EventDispatcher
 
@@ -43,7 +43,6 @@ class NetworkManager(EventDispatcher):
 
         # initialize udp
         self.udp = helper_udp.UDPSocketClass(recv_port=self.port)
-        #todo
         self.pub_key = self.udp.pkse.public_key
         self.addr_opponent = None
         self.udp.udp_recv_data.connect(self._handle_udp_data)
@@ -51,6 +50,7 @@ class NetworkManager(EventDispatcher):
         # multicast publisher and listener
         self.mc_msg = {"addr": (self.ip, self.port), "name": player_name, "key": self.pub_key, "type": self.sd_type}
         self.publisher = helper_multicast.VaultMultiPublisher()
+
 
     def update_opponent_ip(self, addr, key=None):
         self.addr_opponent = addr
@@ -72,6 +72,7 @@ class NetworkManager(EventDispatcher):
     def send_game_data(self, data):
         # ... Serialisiert (json.dumps) und sendet Daten über UDP ...
         msg = json.dumps(data)
+        logger.info(f"send data: {msg}")
         self.udp.send_data(msg, self.addr_opponent)
 
     def on_opponent_found(self, *args):
@@ -106,17 +107,21 @@ class NetworkManager(EventDispatcher):
             #
             self.publisher.stop()
             # inform game
+            logger.info(f"found enemy {enemy_name}")
             opponent_data = {"name": enemy_name}
             self.dispatch('on_opponent_found', opponent_data)
 
     def _handle_udp_data(self, data, addr):
         # ... verarbeitet eingehende Spieldaten ...
+        print("------------------------")
+        logger.info(f"rec data: {data} from {addr}")
         try:
             data_dict = json.loads(data)
         except Exception as e:
             logger.error(f"problem with json data: {e}")
             return
         for key, value in data_dict.items():
+
             if key == "init":
                 client_ip = value.get("ip", addr[0])
                 client_port = value.get("port", addr[1])
@@ -506,5 +511,5 @@ class PongApp(App):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
     PongApp().run()
