@@ -5,16 +5,133 @@ from kivy.properties import (NumericProperty, ReferenceListProperty, ObjectPrope
 from kivy.uix.widget import Widget
 from kivy.vector import Vector
 
-import json
 import logging
+import json
 import random
 import include.multicast.vault_multicast as helper_multicast
 import include.udp.vault_udp.vault_ip as helper_ip
 import include.udp.vault_udp.vault_udp_socket as helper_udp
 
+from kivy.event import EventDispatcher
 
 logger = logging.getLogger(__name__)
 
+# Am Anfang von main.py
+MAX_BALL_SPEED = 38
+POINTS_TO_WIN = 10
+PADDLE_MOVE_SPEED = 80
+
+# Konstanten für Netzwerk-Nachrichten
+MSG_PADDLE_POS = "pad_pos"
+MSG_BALL_VEL = "ball_vel"
+MSG_SCORE_P1 = "score_pl1"
+
+
+class NetworkManager(EventDispatcher):
+    # Definiere Events, die von der Game-Klasse abgefangen werden können
+    __events__ = ('on_opponent_found', 'on_game_data_update', 'on_game_status_update', 'on_score_update',
+                  'on_game_init')
+
+    def __init__(self, player_name):
+        super().__init__()
+        self.me = player_name
+        self.ip = helper_ip.get_ips()[0][0]
+        self.port = random.randint(2000, 20000)
+
+        self.sd_type = "pong"
+        self.listener = helper_multicast.VaultMultiListener()
+
+        # initialize udp
+        self.udp = helper_udp.UDPSocketClass(recv_port=self.port)
+        #todo
+        self.pub_key = self.udp.pkse.public_key
+        self.addr_opponent = None
+        self.udp.udp_recv_data.connect(self._handle_udp_data)
+
+        # multicast publisher and listener
+        self.mc_msg = {"addr": (self.ip, self.port), "name": player_name, "key": self.pub_key, "type": self.sd_type}
+        self.publisher = helper_multicast.VaultMultiPublisher()
+
+    def update_opponent_ip(self, addr, key=None):
+        self.addr_opponent = addr
+        if key:
+            self.udp.pkse.update_key(addr, key)
+
+    def start_search_for_opponent(self):
+        self.listener = helper_multicast.VaultMultiListener()
+        self.listener.start()
+        self.listener.recv_signal.connect(self._handle_multicast_message)
+        self.publisher.update_message(json.dumps(self.mc_msg))
+        self.publisher.start()
+
+    def stop_search_for_opponent(self):
+        self.listener.recv_signal.disconnect(self._handle_multicast_message)
+        self.listener.stop()
+        self.publisher.stop()
+
+    def send_game_data(self, data):
+        # ... Serialisiert (json.dumps) und sendet Daten über UDP ...
+        msg = json.dumps(data)
+        self.udp.send_data(msg, self.addr_opponent)
+
+    def on_opponent_found(self, *args):
+        pass
+
+    def on_game_data_update(self, *args):
+        pass
+
+    def on_game_status_update(self, *args):
+        pass
+
+    def on_score_update(self, *args):
+        pass
+
+    def on_game_init(self, *args):
+        pass
+
+    def _handle_multicast_message(self, msg):
+        # ... verarbeitet eine eingehende Multicast-Nachricht ...
+        # Wenn ein Gegner gefunden wird, löse das Event aus:
+        if not msg.get("name", self.me) == self.me and msg.get("type", "error") == self.sd_type:
+            # received message from multicast
+            server_ip = msg.get("addr")[0]
+            server_port = msg.get("addr")[1]
+            enemy_name = msg.get("name")
+            # encryption
+            server_key = msg.get("key")
+            # udp
+            msg = {"init": {"ip": self.ip, "port": self.port, "key": self.pub_key, "name": self.me}}
+            self.update_opponent_ip(addr=(server_ip, server_port), key=server_key)
+            self.send_game_data(msg)
+            #
+            self.publisher.stop()
+            # inform game
+            opponent_data = {"name": enemy_name}
+            self.dispatch('on_opponent_found', opponent_data)
+
+    def _handle_udp_data(self, data, addr):
+        # ... verarbeitet eingehende Spieldaten ...
+        try:
+            data_dict = json.loads(data)
+        except Exception as e:
+            logger.error(f"problem with json data: {e}")
+            return
+        for key, value in data_dict.items():
+            if key == "init":
+                client_ip = value.get("ip", addr[0])
+                client_port = value.get("port", addr[1])
+                client_key = value.get("key", "")
+                self.update_opponent_ip(addr=(client_ip, client_port), key=client_key)
+                self.dispatch("on_game_init", value)
+                return
+            if key in ["score_pl1", "score_pl2"]:
+                self.dispatch("on_score_update", {key: value})
+                return
+            if key in ["pad_pos", "ball_vel", "ball_pos"]:
+                self.dispatch("on_game_data_update", {key: value})
+            if key in ["pause win_size", "reset_scores", "game_close"]:
+                self.dispatch("on_game_status_update", {key: value})
+                return
 
 class PongPaddle(Widget):
     """Paddle class for "Pong" game"""
@@ -66,28 +183,21 @@ class PongGame(Widget):
 
     def __init__(self):
         """Process of starting of the game:
-             1. Each player starts multicast publisher and listener
-               - publisher publishes his own data: ip, port, name, public key, type of connection
-             2. One of the players automatically receives published data of another
-               - creates key based on own private key and public key of publisher
-               - starts udp connection to the publisher with his ip and port
-               - sends init message to the publisher: own ip, port, pub_key and name
-               - initialises the game
-               - closes publisher and listener
-             3. Another player receives init message sent through UDP
-               - creates key based on own private key and received public key
-               - starts udp connection
-               - initialises the game
-               - closes publisher and listener
         """
         super().__init__()
+        self.debug = True
         self.pl_name = "Dave_{}".format(random.randint(1000000, 10000000))
-        self.sd_type = "pong"
         self.enemy_name = None
 
-        # ip and port settings
-        self.ip = helper_ip.get_ips()[0][0]
-        self.port = random.randint(2000, 20000)
+        self.network = NetworkManager(self.pl_name)
+        self.network.bind(
+            on_opponent_found=self.on_opponent_found,
+            on_game_data_update=self.on_game_data_update,
+            on_game_status_update=self.on_game_status_update,
+            on_score_update=self.on_score_update,
+            on_game_init=self.on_game_init
+        )
+        self.network.start_search_for_opponent()
 
         # variables
         self.is_connected = False
@@ -105,23 +215,8 @@ class PongGame(Widget):
         self.all_controllers = ["mix", "mouse", "keyboard"]
         self.ball.control_mode = self.all_controllers[0]
 
-        self.listener = helper_multicast.VaultMultiListener()
-        self.listener.start()
-        self.listener.recv_signal.connect(self.on_recv_listener)
-
-        # initialize udp
-        self.udp = helper_udp.UDPSocketClass(recv_port=self.port)
-        self.pub_key = self.udp.pkse.public_key
-
-        # multicast publisher and listener
-        mc_msg = {"addr": (self.ip, self.port), "name": self.pl_name, "key": self.pub_key, "type": self.sd_type}
-        self.publisher = helper_multicast.VaultMultiPublisher(message=json.dumps(mc_msg))
-
         logger.info("Welcome {} - let's play pong".format(self.pl_name))
-        logger.debug("multicast started with msg: {}".format(mc_msg))
 
-        # udp receive data event
-        self.udp.udp_recv_data.connect(self.on_recv_data)
         # keyboard press event
         self.keyboard = Window.request_keyboard(self.keyboard_closed, self)
         # window close event:
@@ -136,8 +231,8 @@ class PongGame(Widget):
             # equalise window size
             win_size = self.get_root_window().size
 
-            msg = json.dumps({"win_size": [win_size[0], win_size[1]]})
-            self.udp.send_data(msg)
+            msg = {"win_size": [win_size[0], win_size[1]]}
+            self.network.send_game_data(msg)
 
         else:
             self.enemy = self.player1
@@ -151,8 +246,8 @@ class PongGame(Widget):
         self.me.name = "You: {}".format(self.pl_name)
         self.enemy.name = "Enemy: {}".format(self.enemy_name)
 
-        logger.info("enemy defined")
-        logger.info("game owner: {}".format(self.game_owner))
+        logger.debug(f"enemy defined - {self.enemy_name}")
+        logger.debug("game owner: {}".format(self.game_owner))
 
         # key pressed event
         self.keyboard.bind(on_key_down=self.on_keyboard_down)
@@ -180,7 +275,7 @@ class PongGame(Widget):
         if bounce_pl1 or bounce_pl2:
             if self.game_owner:
                 msg = {"ball_vel": self.ball.velocity, "ball_pos": self.ball.pos}
-                self.udp.send_data(json.dumps(msg))
+                self.network.send_game_data(msg)
 
         # bounce ball off bottom or top
         if (self.ball.y < self.y) or (self.ball.top > self.top):
@@ -191,113 +286,82 @@ class PongGame(Widget):
             if self.game_owner:
                 self.player2.score += 1
                 msg = {"score_pl2": self.player2.score}
-                self.udp.send_data(json.dumps(msg))
+                self.network.send_game_data(msg)
             self.check_player_win(self.player2)
             self.serve_ball(vel=(6, 0))
         if self.ball.right > self.width + 10:
             if self.game_owner:
                 self.player1.score += 1
                 msg = {"score_pl1": self.player1.score}
-                self.udp.send_data(json.dumps(msg))
+                self.network.send_game_data(msg)
             self.check_player_win(self.player1)
             self.serve_ball(vel=(-6, 0))
 
-    def on_recv_data(self, data, addr):
-        """Receive data sent through UDP
-            :param data: received data
-            :type data: str
-            :param addr: IP and Port of sender
-            :type addr: list
-        """
-        # exception handling for json data missing
-        try:
-            data_dict = json.loads(data)
-        except Exception as e:
-            logger.warning("Warning: {}".format(e))
-            data_dict = {}
+    def on_score_update(self, instance, data):
+        if data.get("score_pl1", False):
+            self.player1.score = data.get("score_pl1", False)
+            self.check_player_win(self.player1)
+            return
+        if data.get("score_pl2", False):
+            self.player2.score = data.get("score_pl2", False)
+            self.check_player_win(self.player2)
 
-        # exception handling for not iterable missing
-        logger.debug("data recv {} from {}".format(data, addr))
-        for key, value in data_dict.items():
-            if key == "pad_pos":
-                self.enemy.pos = value
-            if key == "pause":
-                self.set_pause(value)
-            if key == "ball_vel":
-                self.ball.velocity = value
-            if key == "ball_pos" and not value == self.ball.pos:
-                self.ball.pos = value
-            if key == "win_size":
-                self.win_size_pl1 = value
-                self.get_root_window().size = value
-            if key == "reset_scores":
-                self.player1.score = 0
-                self.player2.score = 0
-            if key == "score_pl1":
-                self.player1.score = value
-                self.check_player_win(self.player1)
-            if key == "score_pl2":
-                self.player2.score = value
-                self.check_player_win(self.player2)
-            if key == "game_close":
-                self.player1.score = 0
-                self.player2.score = 0
-                self.pause = True
-                self.ball.end_game_text = "enemy left"
-            if key == "init" and not self.is_connected:
-                self.sym_init = True
+    def on_game_data_update(self, instance, data):
+        if data.get("pad_pos", False):
+            self.enemy.pos = data.get("pad_pos", False)
+            return
+        if data.get("ball_vel", False):
+            self.ball.velocity = data.get("ball_vel", False)
+            return
+        if data.get("ball_pos", False):
+            value = data.get("ball_pos", False)
+            if value != self.ball.pos:
+                self.ball.pos = data.get("ball_pos", False)
 
-                # received message multicast listener
-                client_ip = value.get("ip", addr[0])
-                client_port = value.get("port", addr[1])
-                client_key = value.get("key", "")
-                client_name = value.get("name", "")
-                logger.debug("Enemy {} connected from [{}]:{}".format(client_name, client_ip, client_port))
-                self.enemy_name = client_name
+    def on_game_status_update(self, instance, data):
+        if data.get("pause", False):
+            self.set_pause(data.get("pause"))
+            return
+        #if key == "win_size":
+        #    self.win_size_pl1 = value
+        #    self.get_root_window().size = value
+        #    return
+        if data.get("reset_scores", False):
+            self.player1.score = 0
+            self.player2.score = 0
+            return
+        if data.get("game_close", False):
+            self.player1.score = 0
+            self.player2.score = 0
+            self.pause = True
+            self.is_connected = False
+            self.ball.end_game_text = "enemy left"
+            self.network.start_search_for_opponent()
 
-                # initialize udp and encryption
-                self.udp.pkse.update_key(addr=(client_ip, client_port), key=client_key)
-                self.udp.update_addr(addr=(client_ip, client_port))
+    def on_game_init(self, instance, data):
+        if not self.is_connected:
+            self.sym_init = True
+            # init name
+            client_name = data.get("name", "anonymous")
+            self.enemy_name = client_name
+            # initialize game
+            self.init_game_connection()
+            self.is_connected = True
+            self.network.stop_search_for_opponent()
 
-                # initialize game
-                self.init_game_connection()
-                self.is_connected = True
-                self.publisher.stop()
-                self.listener.recv_signal.disconnect(self.on_recv_listener)
-                self.listener.stop()
-
-    def on_recv_listener(self, msg):
+    def on_opponent_found(self, instance, msg):
         """Listen to Multicast publisher
             :param msg: consists of ip, port, name, public key, type of connection
             :type msg: dict
         """
-        logger.debug("received multicast msg: {}".format(msg))
-        if (not self.is_connected and not msg.get("name", self.pl_name) == self.pl_name and
-                msg.get("type", "error") == self.sd_type):
-            # received message from multicast
-            server_ip = msg.get("addr")[0]
-            server_port = msg.get("addr")[1]
-            self.enemy_name = msg.get("name")
+        self.enemy_name = msg.get("name")
+        logger.debug(f"enemy found: {self.enemy_name} - instance: {instance}")
 
-            # encryption
-            server_key = msg.get("key")
-
-            # udp
-            msg = {"init": {"ip": self.ip, "port": self.port, "key": self.pub_key, "name": self.pl_name}}
-            self.udp.update_addr(addr=(server_ip, server_port))
-            self.udp.pkse.update_key(addr=(server_ip, server_port), key=server_key)
-            self.udp.send_data(json.dumps(msg))
-
-            # self.udp.sym_encryption.update_key(addr=(server_ip, server_port), key=self.key)
-            logger.info("found server ip: {}; port: {}; multicast_msg: {}".format(server_ip, server_port, msg))
-
-            # initialize game
-            self.game_owner = False
-            self.is_connected = True
-            self.init_game_connection()
-            self.listener.recv_signal.disconnect(self.on_recv_listener)
-            self.listener.stop()
-            self.publisher.stop()
+        # initialize game
+        self.game_owner = False
+        self.is_connected = True
+        self.init_game_connection()
+        self.network.stop_search_for_opponent()
 
     def check_player_win(self, player):
         """Check if player has certain points. If yes stop game.
@@ -372,8 +436,8 @@ class PongGame(Widget):
             paddle.center_y = 0 + paddle.height / 2
 
         if paddle == self.me:
-            msg = json.dumps({"pad_pos": self.me.pos})
-            self.udp.send_data(msg)
+            msg = {"pad_pos": self.me.pos}
+            self.network.send_game_data(msg)
 
     def switch_pause_play(self):
         """Switch pause or play"""
@@ -403,7 +467,7 @@ class PongGame(Widget):
             self.player2.score = 0
             msg = msg | {"reset_scores": True}
 
-        self.udp.send_data(json.dumps(msg))
+        self.network.send_game_data(msg)
 
     def on_press_control_mode(self):
         """Signal on press button "Control mode". Changes control mode"""
@@ -418,23 +482,17 @@ class PongGame(Widget):
             :type h: float
         """
         if self.game_owner:
-            msg = json.dumps({"win_size": [w, h]})
-            self.udp.send_data(msg)
+            msg = {"win_size": [w, h]}
+            self.network.send_game_data(msg)
         else:
             self.get_root_window().size = self.win_size_pl1
 
     def stop_thread(self, *args):
         """Stop all threads if game is closed"""
-        logger.info("try to stop")
-        msg = json.dumps({"game_close": True})
-        self.udp.send_data(msg)
-
-        self.listener.recv_signal.disconnect(self.on_recv_listener)
-        self.listener.stop()
-        self.publisher.stop()
-        self.udp.udp_recv_data.disconnect(self.on_recv_data)
-
-        self.udp.stop()
+        logger.debug("try to stop")
+        msg = {"game_close": True}
+        self.network.send_game_data(msg)
+        self.network.stop_search_for_opponent()
 
 
 class PongApp(App):
@@ -448,6 +506,5 @@ class PongApp(App):
 
 
 if __name__ == '__main__':
-    logger = logging.getLogger(__name__)
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)
     PongApp().run()
