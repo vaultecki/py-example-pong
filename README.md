@@ -8,4 +8,5 @@ kivy pong adaptation
 try it out:
 - git clone
 - git submodule update --init
+- pip install -r requirements.txt
 - python main.py
