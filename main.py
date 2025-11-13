@@ -1,7 +1,8 @@
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.window import Window
-from kivy.properties import (NumericProperty, ReferenceListProperty, ObjectProperty)
+from kivy.properties import (NumericProperty, ReferenceListProperty, ObjectProperty,
+                             BooleanProperty, StringProperty)
 from kivy.uix.widget import Widget
 from kivy.vector import Vector
 
@@ -16,15 +17,12 @@ from kivy.event import EventDispatcher
 
 logger = logging.getLogger(__name__)
 
-# Am Anfang von main.py
+
 MAX_BALL_SPEED = 38
 POINTS_TO_WIN = 10
 PADDLE_MOVE_SPEED = 80
-
-# Konstanten für Netzwerk-Nachrichten
-MSG_PADDLE_POS = "pad_pos"
-MSG_BALL_VEL = "ball_vel"
-MSG_SCORE_P1 = "score_pl1"
+BALL_START_SPEED = 6
+PADDLE_CONTROL_AREA_FACTOR = 1/3
 
 
 class NetworkManager(EventDispatcher):
@@ -51,6 +49,19 @@ class NetworkManager(EventDispatcher):
         self.publisher = helper_multicast.VaultMultiPublisher()
 
         self.udp.udp_recv_data.connect(self._handle_udp_data)
+
+        # Mapping von Daten-Keys zu Event-Namen
+        self.event_map = {
+            "score_pl1": "on_score_update",
+            "score_pl2": "on_score_update",
+            "pad_pos": "on_game_data_update",
+            "ball_vel": "on_game_data_update",
+            "ball_pos": "on_game_data_update",
+            "pause": "on_game_status_update",
+            "win_size": "on_game_status_update",
+            "reset_scores": "on_game_status_update",
+            "game_close": "on_game_status_update",
+        }
 
     def update_opponent_ip(self, addr, key=None):
         self.addr_opponent = addr
@@ -119,6 +130,7 @@ class NetworkManager(EventDispatcher):
         except Exception as e:
             logger.error(f"problem with json data: {e}")
             return
+
         for key, value in data_dict.items():
             if key == "init":
                 client_ip = value.get("ip", addr[0])
@@ -126,15 +138,14 @@ class NetworkManager(EventDispatcher):
                 client_key = value.get("key", "")
                 self.update_opponent_ip(addr=(client_ip, client_port), key=client_key)
                 self.dispatch("on_game_init", value)
-                return
-            if key in ["score_pl1", "score_pl2"]:
-                self.dispatch("on_score_update", {key: value})
-                return
-            if key in ["pad_pos", "ball_vel", "ball_pos"]:
-                self.dispatch("on_game_data_update", {key: value})
-            if key in ["pause", "win_size", "reset_scores", "game_close"]:
-                self.dispatch("on_game_status_update", {key: value})
-                return
+                return  # Wichtig
+
+            # Die neue, saubere Dispatch-Logik
+            event_name = self.event_map.get(key)
+            if event_name:
+                self.dispatch(event_name, {key: value})
+            else:
+                logger.warning(f"Unbekannter Daten-Key empfangen: {key}")
 
 class PongPaddle(Widget):
     """Paddle class for "Pong" game"""
@@ -152,10 +163,10 @@ class PongPaddle(Widget):
         """
         if self.collide_widget(ball):
             vx, vy = ball.velocity
-            if 0 < vx + acceleration < 38:
+            if 0 < vx + acceleration < MAX_BALL_SPEED:
                 vx += acceleration
 
-            elif 0 > vx - acceleration > -38:
+            elif 0 > vx - acceleration > -MAX_BALL_SPEED:
                 vx -= acceleration
 
             offset = (ball.center_y - self.center_y) / (self.height / 2)
@@ -184,11 +195,19 @@ class PongGame(Widget):
     player1 = ObjectProperty(None)
     player2 = ObjectProperty(None)
 
+    # Diese ersetzen die Attribute in __init__
+    is_connected = BooleanProperty(False)
+    game_owner = BooleanProperty(True)
+    pause = BooleanProperty(False)
+
+    # Dieses Property steuert den Text im "End Game"-Label
+    game_message = StringProperty("")
+
     def __init__(self):
         """Process of starting of the game:
         """
         super().__init__()
-        self.debug = True
+        self.last_sent_pos = [0, 0]
         self.pl_name = "Dave_{}".format(random.randint(1000000, 10000000))
         self.enemy_name = None
 
@@ -268,10 +287,25 @@ class PongGame(Widget):
     def update(self, *args):
         """Update game"""
         # print(*args)
-        if not self.pause:
-            self.ball.move()
+        if self.pause:
+            return
 
-        # bounce off paddles
+        self.ball.move()
+        self._check_paddle_collisions()
+        self._check_wall_collisions()
+        self._check_scoring()
+
+        if self.is_connected:
+            self._send_paddle_update()
+
+    def _send_paddle_update(self):
+        """Sendet die Paddel-Position, aber nur, wenn sie sich geändert hat."""
+        if self.me and self.me.pos != self.last_sent_pos:
+            self.last_sent_pos = self.me.pos[:]  # Wichtig: Eine Kopie speichern
+            msg = {"pad_pos": self.me.pos}
+            self.network.send_game_data(msg)
+
+    def _check_paddle_collisions(self):
         bounce_pl1 = self.player1.bounce_ball(self.ball)
         bounce_pl2 = self.player2.bounce_ball(self.ball)
 
@@ -280,25 +314,25 @@ class PongGame(Widget):
                 msg = {"ball_vel": self.ball.velocity, "ball_pos": self.ball.pos}
                 self.network.send_game_data(msg)
 
-        # bounce ball off bottom or top
+    def _check_wall_collisions(self):
         if (self.ball.y < self.y) or (self.ball.top > self.top):
             self.ball.velocity_y *= -1
 
-        # went off to a side to score point?
+    def _check_scoring(self):
         if self.ball.x < self.x - 10:
             if self.game_owner:
                 self.player2.score += 1
                 msg = {"score_pl2": self.player2.score}
                 self.network.send_game_data(msg)
             self.check_player_win(self.player2)
-            self.serve_ball(vel=(6, 0))
+            self.serve_ball(vel=(BALL_START_SPEED, 0))
         if self.ball.right > self.width + 10:
             if self.game_owner:
                 self.player1.score += 1
                 msg = {"score_pl1": self.player1.score}
                 self.network.send_game_data(msg)
             self.check_player_win(self.player1)
-            self.serve_ball(vel=(-6, 0))
+            self.serve_ball(vel=(-BALL_START_SPEED, 0))
 
     def on_score_update(self, instance, data):
         if data.get("score_pl1", False):
@@ -339,7 +373,7 @@ class PongGame(Widget):
             self.ball.end_game_text = "enemy left"
             self.network.start_search_for_opponent()
             return
-        self.set_pause(data.get("pause", False))
+        self.pause = data.get("pause", False)
 
     def on_game_init(self, instance, data):
         if not self.is_connected:
@@ -371,7 +405,7 @@ class PongGame(Widget):
             :param player: player
             :type player: PongBall
         """
-        if player.score >= 10:
+        if player.score >= POINTS_TO_WIN:
             self.game_over = True
             self.pause = True
             if player == self.me:
@@ -386,10 +420,10 @@ class PongGame(Widget):
         """
         if self.ball.control_mode in ["mouse", "mix"]:
             if self.me == self.player1:
-                if touch.x < self.width / 3:
+                if touch.x < (self.width * PADDLE_CONTROL_AREA_FACTOR):
                     self.move_paddle(self.me, touch.y)
             elif self.me == self.player2:
-                if touch.x > self.width - self.width / 3:
+                if touch.x > self.width - (self.width * PADDLE_CONTROL_AREA_FACTOR):
                     self.move_paddle(self.me, touch.y)
 
     def on_keyboard_down(self, keyboard, keycode, text, modifiers):
@@ -402,9 +436,9 @@ class PongGame(Widget):
         move_speed = 80
         if self.ball.control_mode in ["keyboard", "mix"]:
             if keycode[1] in ['w', "up"]:
-                self.move_paddle(paddle=self.me, goal_pos=self.me.center_y + move_speed)
+                self.move_paddle(paddle=self.me, goal_pos=self.me.center_y + PADDLE_MOVE_SPEED)
             elif keycode[1] in ['s', "down"]:
-                self.move_paddle(paddle=self.me, goal_pos=self.me.center_y - move_speed)
+                self.move_paddle(paddle=self.me, goal_pos=self.me.center_y - PADDLE_MOVE_SPEED)
 
         if keycode[1] == "p":
             self.switch_pause_play()
@@ -438,10 +472,6 @@ class PongGame(Widget):
         elif lower_pos <= 0:
             paddle.center_y = 0 + paddle.height / 2
 
-        if paddle == self.me:
-            msg = {"pad_pos": self.me.pos}
-            self.network.send_game_data(msg)
-
     def switch_pause_play(self):
         """Switch pause or play"""
         if not self.pause:
@@ -449,20 +479,19 @@ class PongGame(Widget):
         else:
             self.set_pause(False)
 
-    def set_pause(self, pause=False):
-        """Set pause or play
-            :param pause: if true-pause, if false-play
-        """
-        if pause:
-            self.pause = True
-            self.ball.end_game_text = "PAUSE"
+    def on_pause(self, instance, value):
+        if value:
+            # Das Spiel ist pausiert
+            if not self.game_over:  # Prüfen, ob das Spiel nicht schon vorbei ist
+                self.game_message = "PAUSE"
         else:
-            self.pause = False
-            self.ball.end_game_text = ""
+            # Das Spiel läuft weiter
+            if not self.game_over:
+                self.game_message = ""
 
     def on_press_pause_play(self):
         """Signal on press button "Pause_Play". Switch pause. Reset score if one of players reached certain point"""
-        self.switch_pause_play()
+        self.pause = not self.pause
 
         msg = {"pause": self.pause}
         if self.player1.score >= 10 or self.player2.score >= 10:
