@@ -1,3 +1,6 @@
+# Copyright [2025] [ecki]
+# SPDX-License-Identifier: Apache-2.0
+
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.window import Window
@@ -9,9 +12,10 @@ from kivy.vector import Vector
 import logging
 import json
 import random
+
 import include.multicast.vault_multicast as helper_multicast
-import include.udp as helper_ip
-import include.udp as helper_udp
+import include.udp.vault_ip as helper_ip
+import include.udp.vault_udp_socket as helper_udp
 
 from kivy.event import EventDispatcher
 
@@ -26,28 +30,42 @@ PADDLE_CONTROL_AREA_FACTOR = 1/3
 
 
 class NetworkManager(EventDispatcher):
-    # Definiere Events, die von der Game-Klasse abgefangen werden können
-    __events__ = ('on_opponent_found', 'on_game_data_update', 'on_game_status_update', 'on_score_update',
-                  'on_game_init')
+    """Manages network communication for the Pong game with updated UDP socket API."""
+
+    __events__ = ('on_opponent_found', 'on_game_data_update', 'on_game_status_update',
+                  'on_score_update', 'on_game_init')
 
     def __init__(self, player_name):
         super().__init__()
         self.me = player_name
-        self.ip = helper_ip.get_ips()[0][0]
+
+        # Get IP address using new API
+        ipv4_list, ipv6_list = helper_ip.get_ip_addresses()
+        self.ip = ipv4_list[0] if ipv4_list else "127.0.0.1"
         self.port = random.randint(2000, 20000)
 
         self.sd_type = "pong"
         self.listener = helper_multicast.VaultMultiListener()
 
-        # initialize udp
+        # Initialize UDP socket with new API
         self.udp = helper_udp.UDPSocketClass(recv_port=self.port)
-        self.pub_key = self.udp.pkse.public_key
+
+        # Get public keys from encryption manager
+        self.pub_key = self.udp._encryption.enc_public_key
+        self.sign_key = self.udp._encryption.sign_public_key
         self.addr_opponent = None
 
-        # multicast publisher and listener
-        self.mc_msg = {"addr": (self.ip, self.port), "name": player_name, "key": self.pub_key, "type": self.sd_type}
+        # Multicast publisher and listener
+        self.mc_msg = {
+            "addr": (self.ip, self.port),
+            "name": player_name,
+            "enc_key": self.pub_key,
+            "sign_key": self.sign_key,
+            "type": self.sd_type
+        }
         self.publisher = helper_multicast.VaultMultiPublisher()
 
+        # Connect signal with new API
         self.udp.udp_recv_data.connect(self._handle_udp_data)
 
         # Mapping von Daten-Keys zu Event-Namen
@@ -63,28 +81,49 @@ class NetworkManager(EventDispatcher):
             "game_close": "on_game_status_update",
         }
 
-    def update_opponent_ip(self, addr, key=None):
+    def update_opponent_ip(self, addr, enc_key=None, sign_key=None):
+        """Update opponent address and keys using new API."""
         self.addr_opponent = addr
-        if key:
-            self.udp.pkse.update_key(addr, key)
+
+        # Add peer to UDP socket
+        if not self.udp.has_peer(addr):
+            self.udp.add_peer(addr)
+            logger.info(f"Added peer {addr}")
+
+        # Update encryption keys if provided
+        if enc_key and sign_key:
+            self.udp._encryption.update_peer_keys(addr, enc_key, sign_key)
+            logger.debug(f"Updated keys for {addr}")
 
     def start_search_for_opponent(self):
+        """Start multicast search for opponents."""
         self.listener = helper_multicast.VaultMultiListener()
         self.listener.start()
         self.listener.recv_signal.connect(self._handle_multicast_message)
         self.publisher.update_message(json.dumps(self.mc_msg))
         self.publisher.start()
+        logger.info("Started opponent search")
 
     def stop_search_for_opponent(self):
+        """Stop multicast search."""
         self.listener.recv_signal.disconnect(self._handle_multicast_message)
         self.listener.stop()
         self.publisher.stop()
+        logger.info("Stopped opponent search")
 
     def send_game_data(self, data):
-        # ... Serialisiert (json.dumps) und sendet Daten über UDP ...
+        """Send game data via UDP with new API."""
         msg = json.dumps(data)
-        logger.info(f"send data: {msg}")
-        self.udp.udp_send_data.emit(msg, self.addr_opponent)
+        logger.info(f"Sending data: {msg[:100]}...")
+
+        if self.addr_opponent:
+            try:
+                # Use new send API - automatically encrypts if keys available
+                self.udp.send_data(msg, self.addr_opponent)
+            except Exception as e:
+                logger.error(f"Failed to send data: {e}")
+        else:
+            logger.warning("No opponent address set")
 
     def on_opponent_found(self, *args):
         pass
@@ -102,50 +141,92 @@ class NetworkManager(EventDispatcher):
         pass
 
     def _handle_multicast_message(self, msg):
-        # ... verarbeitet eine eingehende Multicast-Nachricht ...
-        # Wenn ein Gegner gefunden wird, löse das Event aus:
+        """Process incoming multicast messages with updated key handling."""
         if not msg.get("name", self.me) == self.me and msg.get("type", "error") == self.sd_type:
-            # received message from multicast
+            # Extract connection info
             server_ip = msg.get("addr")[0]
             server_port = msg.get("addr")[1]
             enemy_name = msg.get("name")
-            # encryption
-            server_key = msg.get("key")
-            # udp
-            msg = {"init": {"ip": self.ip, "port": self.port, "key": self.pub_key, "name": self.me}}
-            self.update_opponent_ip(addr=(server_ip, server_port), key=server_key)
-            self.send_game_data(msg)
-            #
+
+            # Get encryption keys (new format)
+            enc_key = msg.get("enc_key") or msg.get("key")  # Fallback for old format
+            sign_key = msg.get("sign_key", "")
+
+            if not enc_key:
+                logger.warning(f"No encryption key in message from {enemy_name}")
+                return
+
+            # Update opponent info
+            server_addr = (server_ip, server_port)
+            self.update_opponent_ip(addr=server_addr, enc_key=enc_key, sign_key=sign_key)
+
+            # Send initial connection message
+            init_msg = {
+                "init": {
+                    "ip": self.ip,
+                    "port": self.port,
+                    "enc_key": self.pub_key,
+                    "sign_key": self.sign_key,
+                    "name": self.me
+                }
+            }
+            self.send_game_data(init_msg)
+
+            # Stop searching
             self.publisher.stop()
-            # inform game
-            logger.info(f"found enemy {enemy_name}")
+
+            # Inform game
+            logger.info(f"Found opponent: {enemy_name}")
             opponent_data = {"name": enemy_name}
             self.dispatch('on_opponent_found', opponent_data)
 
     def _handle_udp_data(self, data, addr):
-        # ... verarbeitet eingehende Spieldaten ...
-        logger.info(f"rec data: {data} from {addr}")
+        """Process incoming UDP data with improved error handling."""
+        logger.info(f"Received data from {addr}: {data[:100]}...")
+
         try:
-            data_dict = json.loads(data.decode("utf-8"))
+            # Data is already a string from the new UDP API
+            if isinstance(data, bytes):
+                data_dict = json.loads(data.decode("utf-8"))
+            else:
+                data_dict = json.loads(data)
         except Exception as e:
-            logger.error(f"problem with json data: {e}")
+            logger.error(f"Failed to parse JSON data: {e}")
             return
 
+        # Handle init message
         for key, value in data_dict.items():
             if key == "init":
                 client_ip = value.get("ip", addr[0])
                 client_port = value.get("port", addr[1])
-                client_key = value.get("key", "")
-                self.update_opponent_ip(addr=(client_ip, client_port), key=client_key)
-                self.dispatch("on_game_init", value)
-                return  # Wichtig
+                client_addr = (client_ip, client_port)
 
-            # Die neue, saubere Dispatch-Logik
+                # Get keys (support both old and new format)
+                enc_key = value.get("enc_key") or value.get("key")
+                sign_key = value.get("sign_key", "")
+
+                if enc_key:
+                    self.update_opponent_ip(addr=client_addr, enc_key=enc_key, sign_key=sign_key)
+
+                self.dispatch("on_game_init", value)
+                return
+
+            # Dispatch other events
             event_name = self.event_map.get(key)
             if event_name:
                 self.dispatch(event_name, {key: value})
             else:
-                logger.warning(f"Unbekannter Daten-Key empfangen: {key}")
+                logger.warning(f"Unknown data key received: {key}")
+
+    def cleanup(self):
+        """Cleanup resources on shutdown."""
+        self.stop_search_for_opponent()
+        if self.udp:
+            try:
+                self.udp.stop()
+            except Exception as e:
+                logger.error(f"Error stopping UDP socket: {e}")
+
 
 class PongPaddle(Widget):
     """Paddle class for "Pong" game"""
@@ -242,7 +323,13 @@ class PongGame(Widget):
         # keyboard press event
         self.keyboard = Window.request_keyboard(self.keyboard_closed, self)
         # window close event:
-        Window.bind(on_request_close=self.stop_thread)
+        Window.bind(on_request_close=self._on_window_close)
+
+    def _on_window_close(self, *args):
+        """Proper cleanup on window close."""
+        self.stop_thread(*args)
+        self.network.cleanup()
+        return False
 
     def init_game_connection(self):
         """Initialize the game after successful connection"""
@@ -521,10 +608,18 @@ class PongGame(Widget):
 
     def stop_thread(self, *args):
         """Stop all threads if game is closed"""
-        logger.debug("try to stop")
-        msg = {"game_close": True}
-        self.network.send_game_data(msg)
-        self.network.stop_search_for_opponent()
+        logger.debug("Stopping game threads")
+
+        # Notify opponent
+        if self.is_connected and self.network.addr_opponent:
+            try:
+                msg = {"game_close": True}
+                self.network.send_game_data(msg)
+            except Exception as e:
+                logger.error(f"Failed to send close message: {e}")
+
+        # Cleanup network
+        self.network.cleanup()
 
 
 class PongApp(App):
