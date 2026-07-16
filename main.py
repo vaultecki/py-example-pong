@@ -329,6 +329,7 @@ class PongGame(Widget):
         self.last_sent_pos = [0, 0]
         self.pl_name = f"Dave_{random.randint(1000000, 10000000)}"
         self.enemy_name = None
+        self._update_event = None
 
         self.network = NetworkManager(self.pl_name)
         self.network.bind(
@@ -406,7 +407,13 @@ class PongGame(Widget):
         Window.bind(on_resize=self.on_resize_window)
 
         self.serve_ball()
-        Clock.schedule_interval(self.update, 1.0 / 60.0)
+        # init_game_connection() runs again on every reconnect (e.g. after
+        # game_close -> a new opponent found); without cancelling the old
+        # interval first, update() would end up scheduled multiple times
+        # and fire that many times per frame.
+        if self._update_event is not None:
+            self._update_event.cancel()
+        self._update_event = Clock.schedule_interval(self.update, 1.0 / 60.0)
 
         # Start synchronization process
         self.start_synchronization()
@@ -552,6 +559,10 @@ class PongGame(Widget):
             self.game_over = False
             self.ball.end_game_text = ""
             self.is_synchronized = True  # Keep synchronized on reset
+            # The side that triggered the reset already re-serves its own
+            # ball locally; without doing it here too, this side's ball
+            # would keep its stale (likely off-screen) position/velocity.
+            self.serve_ball()
             return
 
         if "game_close" in data:
@@ -720,6 +731,7 @@ class PongGame(Widget):
             self.player2.score = 0
             self.game_over = False
             self.ball.end_game_text = ""
+            self.serve_ball()
             msg["reset_scores"] = True
 
         if self.is_connected:

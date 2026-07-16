@@ -2,17 +2,13 @@
 
 A peer-to-peer multiplayer Pong game built with Kivy, featuring encrypted UDP communication, automatic peer discovery via multicast, and synchronized gameplay.
 
-## Known Issue
-- broken at the moment
-- network needs a fix
-
 ## Features
 
 - 🎮 **Classic Pong Gameplay**: Two-player competitive Pong
 - 🔍 **Automatic Peer Discovery**: Multicast-based opponent finding
 - 🔄 **Synchronized Start**: Both players must be ready before game begins
 - 🎯 **Multiple Control Modes**: Mouse, keyboard, or mixed controls
-- 🚀 **Low Latency**: Optimized UDP protocol with replay attack prevention
+- 🚀 **Low Latency**: Compressed, MTU-padded UDP protocol
 - 📊 **Score Tracking**: First to 10 points wins
 
 ## Architecture
@@ -38,7 +34,7 @@ A peer-to-peer multiplayer Pong game built with Kivy, featuring encrypted UDP co
 1. **NetworkManager**: Handles all network communication and events
 2. **VaultUDPSocket**: Encrypted, compressed UDP communication
 3. **VaultMulticast**: Peer discovery via multicast announcements
-4. **Encryption Module**: NaCl-based authenticated encryption with replay protection
+4. **Encryption Module**: NaCl SealedBox (anonymous, unauthenticated encryption -- see [Security Considerations](#security-considerations))
 
 ## Installation
 
@@ -71,7 +67,6 @@ pong/
     ├── multicast/
     │   └── vault_multicast.py        # Multicast discovery
     └── udp/
-        ├── __init__.py
         ├── vault_ip.py               # IP utilities
         ├── vault_udp_socket.py       # UDP socket wrapper
         ├── vault_udp_encryption.py   # Encryption manager
@@ -140,15 +135,14 @@ python main.py
 - `init`: Initial connection setup
 - `sync_ready`: Player ready for synchronization
 - `sync_ack`: Synchronization acknowledgment
-- `enc_key`, `sign_key`: Public key exchange
+- `enc_key`: Public key exchange (sent as part of the `init` message)
 
 ### Security Features
 
-1. **Authenticated Encryption**: NaCl Box (X25519 + XSalsa20 + Poly1305)
-2. **Message Signing**: Ed25519 signatures for key exchange
-3. **Replay Protection**: Nonce tracking with timestamp validation
-4. **Rate Limiting**: 100 messages/second per peer
-5. **Key Lifecycle**: Automatic key rotation and cleanup
+1. **Anonymous Encryption**: NaCl SealedBox (X25519 + XSalsa20 + Poly1305) -- see [Security Considerations](#security-considerations) for what this does *not* protect against
+2. **Compression**: zstd for all payloads
+3. **Rate Limiting**: 100 messages/second per peer
+4. **Key Lifecycle**: Automatic key rotation and expiry
 
 ### Network Discovery
 
@@ -158,8 +152,7 @@ The game uses multicast (224.1.1.1:5004) for peer discovery:
 {
     "addr": ["192.168.1.100", 15293],
     "name": "Dave_4630676",
-    "enc_key": "base64_encoded_key",
-    "sign_key": "base64_encoded_key",
+    "key": "base64_encoded_public_key",
     "type": "pong"
 }
 ```
@@ -340,17 +333,25 @@ self.network.send_game_data(msg)
 
 ### Threat Model
 
+The transport uses NaCl **SealedBox**, which is anonymous, unauthenticated
+encryption: it hides message contents from anyone without the recipient's
+private key, but it does not verify who sent a message.
+
 **Protected Against**:
-- ✅ Eavesdropping (encryption)
-- ✅ Tampering (authenticated encryption)
-- ✅ Replay attacks (nonce + timestamp)
-- ✅ Man-in-the-middle (key signatures)
-- ✅ Rate-based DoS (rate limiting)
+- ✅ Eavesdropping (SealedBox encryption -- an observer without the recipient's private key can't read message contents)
+- ✅ Rate-based DoS (per-peer rate limiting)
 
 **Not Protected Against**:
+- ❌ Sender spoofing (anyone holding a peer's public key -- which is broadcast openly via multicast -- can send that peer validly-encrypted messages; there is no way to verify who actually sent a given message)
+- ❌ Replay attacks (no nonce/timestamp tracking -- a captured ciphertext can be resent later and will decrypt successfully again)
+- ❌ Man-in-the-middle during key exchange (public keys are exchanged in the clear on first contact with no signing or verification; an attacker present from the start of a session could substitute their own key unnoticed)
 - ❌ Network-level DoS (use firewall)
 - ❌ Physical access to machine
 - ❌ Compromised Python environment
+
+Given all of this, treat the game as suitable for a trusted LAN among people
+who already trust each other -- not as a hardened protocol for hostile
+networks.
 
 ### Best Practices
 
@@ -388,7 +389,13 @@ This is a personal project, but suggestions are welcome via issues.
 
 ## Changelog
 
-### Version 2.0 (Current)
+### Version 2.1 (Current)
+- Switched the transport to NaCl SealedBox (anonymous, unauthenticated encryption -- see [Security Considerations](#security-considerations))
+- Added ruff/mypy/pytest tooling and CI for the main game code
+- Fixed a reconnect bug where rejoining a game would schedule the update loop multiple times
+- Fixed the ball not re-serving on a peer that didn't trigger a score reset
+
+### Version 2.0
 - Upgraded to Protocol v2 with structured format
 - Added synchronization phase before game start
 - Deterministic game owner selection
