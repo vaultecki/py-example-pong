@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "py-example-pong"
+version = "0.1.0"
+description = "Networked two-player Pong built with Kivy, using the py-vault-udp and py-vault-multicast submodules for encrypted transport and peer discovery."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = [
+    "Kivy>=2.2.0",
+    "psygnal>=0.10",
+    "PyNaCl>=1.6.0",
+    "msgpack",
+    "pyzstd",
+    "psutil",
+]
+
+[project.optional-dependencies]
+dev = ["ruff", "mypy", "pytest", "pytest-cov"]
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.ruff]
+line-length = 100
+exclude = ["include"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4", "PIE", "RUF"]
+ignore = [
+    "UP006", # non-pep585-annotation: keep typing.Dict/List for readability
+    "UP035", # deprecated-import: same as above
+    "UP045", # non-pep604-annotation-optional: keep Optional[...] for readability
+]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["main.py"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["main"]

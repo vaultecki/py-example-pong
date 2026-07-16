@@ -1,19 +1,25 @@
 # Copyright [2025] [ecki]
 # SPDX-License-Identifier: Apache-2.0
 
-from kivy.app import App
-from kivy.clock import Clock
-from kivy.core.window import Window
-from kivy.properties import (NumericProperty, ReferenceListProperty, ObjectProperty,
-                             BooleanProperty, StringProperty)
-from kivy.uix.widget import Widget
-from kivy.vector import Vector
-
-import logging
 import json
+import logging
 import os
 import random
 import sys
+
+from kivy.app import App
+from kivy.clock import Clock
+from kivy.core.window import Window
+from kivy.event import EventDispatcher
+from kivy.properties import (
+    BooleanProperty,
+    NumericProperty,
+    ObjectProperty,
+    ReferenceListProperty,
+    StringProperty,
+)
+from kivy.uix.widget import Widget
+from kivy.vector import Vector
 
 # The submodules under include/ are flat modules (no __init__.py), and
 # internally import each other by bare name (e.g. "import vault_ip"), so
@@ -24,11 +30,9 @@ for _sub in ("multicast", "udp"):
     if _sub_path not in sys.path:
         sys.path.insert(0, _sub_path)
 
-import vault_multicast as helper_multicast
-import vault_ip as helper_ip
-import vault_udp_socket as helper_udp
-
-from kivy.event import EventDispatcher
+import vault_ip as helper_ip  # noqa: E402
+import vault_multicast as helper_multicast  # noqa: E402
+import vault_udp_socket as helper_udp  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +59,7 @@ class NetworkManager(EventDispatcher):
         self.me = player_name
 
         # Get IP address using new API
-        ipv4_list, ipv6_list = helper_ip.get_ip_addresses()
+        ipv4_list, _ipv6_list = helper_ip.get_ip_addresses()
         self.ip = ipv4_list[0] if ipv4_list else "127.0.0.1"
         self.port = random.randint(2000, 20000)
 
@@ -323,7 +327,7 @@ class PongGame(Widget):
         """Initialize the Pong game."""
         super().__init__()
         self.last_sent_pos = [0, 0]
-        self.pl_name = "Dave_{}".format(random.randint(1000000, 10000000))
+        self.pl_name = f"Dave_{random.randint(1000000, 10000000)}"
         self.enemy_name = None
 
         self.network = NetworkManager(self.pl_name)
@@ -355,7 +359,7 @@ class PongGame(Widget):
         self.all_controllers = ["mix", "mouse", "keyboard"]
         self.ball.control_mode = self.all_controllers[0]
 
-        logger.info("Welcome {} - let's play pong".format(self.pl_name))
+        logger.info(f"Welcome {self.pl_name} - let's play pong")
 
         # Keyboard setup
         self.keyboard = Window.request_keyboard(self.keyboard_closed, self)
@@ -392,8 +396,8 @@ class PongGame(Widget):
             self.ball.velocity = [-6.5, 0]
 
         # Set player names
-        self.me.name = "You: {}".format(self.pl_name)
-        self.enemy.name = "Enemy: {}".format(self.enemy_name)
+        self.me.name = f"You: {self.pl_name}"
+        self.enemy.name = f"Enemy: {self.enemy_name}"
 
         logger.debug(f"Enemy: {self.enemy_name}, Game owner: {self.game_owner}")
 
@@ -462,10 +466,9 @@ class PongGame(Widget):
         bounce_pl1 = self.player1.bounce_ball(self.ball)
         bounce_pl2 = self.player2.bounce_ball(self.ball)
 
-        if bounce_pl1 or bounce_pl2:
-            if self.game_owner:
-                msg = {"ball_vel": self.ball.velocity, "ball_pos": self.ball.pos}
-                self.network.send_game_data(msg)
+        if (bounce_pl1 or bounce_pl2) and self.game_owner:
+            msg = {"ball_vel": self.ball.velocity, "ball_pos": self.ball.pos}
+            self.network.send_game_data(msg)
 
     def _check_wall_collisions(self):
         """Check and handle wall collisions."""
@@ -498,7 +501,7 @@ class PongGame(Widget):
         """Handle synchronization messages."""
         logger.debug(f"Sync message received: {data}")
 
-        if "sync_ready" in data and data["sync_ready"]:
+        if data.get("sync_ready"):
             # Opponent is ready
             logger.info("Opponent is ready for sync")
 
@@ -516,7 +519,7 @@ class PongGame(Widget):
                 self.network.send_game_data(msg)
                 self.complete_synchronization()
 
-        elif "sync_ack" in data and data["sync_ack"]:
+        elif data.get("sync_ack"):
             # Received acknowledgment
             logger.info("Received sync acknowledgment")
             if self.sync_state == "ready":
@@ -537,9 +540,8 @@ class PongGame(Widget):
             self.enemy.pos = data["pad_pos"]
         elif "ball_vel" in data:
             self.ball.velocity = data["ball_vel"]
-        elif "ball_pos" in data:
-            if data["ball_pos"] != self.ball.pos:
-                self.ball.pos = data["ball_pos"]
+        elif "ball_pos" in data and data["ball_pos"] != self.ball.pos:
+            self.ball.pos = data["ball_pos"]
 
     def on_game_status_update(self, instance, data):
         """Handle game status updates (pause, reset, close, game_over)."""
@@ -568,9 +570,10 @@ class PongGame(Widget):
             self.game_over = True
             self.pause = True
             winner = data.get("winner")
-            if winner == "player1" and self.me == self.player1:
-                self.ball.end_game_text = "You won!!!"
-            elif winner == "player2" and self.me == self.player2:
+            i_won = (winner == "player1" and self.me == self.player1) or (
+                winner == "player2" and self.me == self.player2
+            )
+            if i_won:
                 self.ball.end_game_text = "You won!!!"
             else:
                 self.ball.end_game_text = "You lost"
@@ -628,12 +631,14 @@ class PongGame(Widget):
     def on_touch_move(self, touch):
         """Handle mouse movement for paddle control."""
         if self.ball.control_mode in ["mouse", "mix"]:
-            if self.me == self.player1:
-                if touch.x < (self.width * PADDLE_CONTROL_AREA_FACTOR):
-                    self.move_paddle(self.me, touch.y)
-            elif self.me == self.player2:
-                if touch.x > self.width - (self.width * PADDLE_CONTROL_AREA_FACTOR):
-                    self.move_paddle(self.me, touch.y)
+            in_pl1_zone = self.me == self.player1 and touch.x < (
+                self.width * PADDLE_CONTROL_AREA_FACTOR
+            )
+            in_pl2_zone = self.me == self.player2 and touch.x > self.width - (
+                self.width * PADDLE_CONTROL_AREA_FACTOR
+            )
+            if in_pl1_zone or in_pl2_zone:
+                self.move_paddle(self.me, touch.y)
 
     def on_keyboard_down(self, keyboard, keycode, text, modifiers):
         """Handle keyboard input for paddle control."""
