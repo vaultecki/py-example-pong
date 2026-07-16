@@ -9,7 +9,6 @@ A peer-to-peer multiplayer Pong game built with Kivy, featuring encrypted UDP co
 ## Features
 
 - 🎮 **Classic Pong Gameplay**: Two-player competitive Pong
-- 🔐 **Encrypted Communication**: Authenticated asymmetric encryption using NaCl/libsodium
 - 🔍 **Automatic Peer Discovery**: Multicast-based opponent finding
 - 🔄 **Synchronized Start**: Both players must be ready before game begins
 - 🎯 **Multiple Control Modes**: Mouse, keyboard, or mixed controls
