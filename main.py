@@ -11,11 +11,22 @@ from kivy.vector import Vector
 
 import logging
 import json
+import os
 import random
+import sys
 
-import include.multicast.vault_multicast as helper_multicast
-import include.udp.vault_ip as helper_ip
-import include.udp.vault_udp_socket as helper_udp
+# The submodules under include/ are flat modules (no __init__.py), and
+# internally import each other by bare name (e.g. "import vault_ip"), so
+# their own directories -- not "include" -- must be on sys.path.
+_INCLUDE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "include")
+for _sub in ("multicast", "udp"):
+    _sub_path = os.path.join(_INCLUDE_DIR, _sub)
+    if _sub_path not in sys.path:
+        sys.path.insert(0, _sub_path)
+
+import vault_multicast as helper_multicast
+import vault_ip as helper_ip
+import vault_udp_socket as helper_udp
 
 from kivy.event import EventDispatcher
 
@@ -55,16 +66,13 @@ class NetworkManager(EventDispatcher):
         self.udp = helper_udp.UDPSocketClass(recv_port=self.port)
 
         # Keys
-        self.pub_key = self.udp._encryption.enc_public_key
-        self.sign_key = self.udp._encryption.sign_public_key
         self.addr_opponent = None
 
         # Multicast message
         self.mc_msg = {
             "addr": (self.ip, self.port),
             "name": player_name,
-            "enc_key": self.pub_key,
-            "sign_key": self.sign_key,
+            "key": self.udp.own_public_key,
             "type": self.sd_type,
         }
         self.publisher = helper_multicast.VaultMultiPublisher()
@@ -92,23 +100,21 @@ class NetworkManager(EventDispatcher):
     # Opponent handling
     # -----------------------
 
-    def update_opponent_ip(self, addr, enc_key=None, sign_key=None):
+    def update_opponent_ip(self, addr, key=None):
         """Update opponent address and encryption keys."""
         self.addr_opponent = addr
 
-        # IMPORTANT: Set keys BEFORE adding peer!
-        if enc_key and sign_key:
-            self.udp._encryption.update_peer_keys(addr, enc_key, sign_key)
-            logger.info(f"Updated encryption keys for {addr}")
-        else:
+        if key:
+            # add_peer() pre-seeds the key whether or not the peer already
+            # exists, so a single call covers both "new peer" and "refresh
+            # key for known peer".
+            self.udp.add_peer((addr[0], addr[1], key))
+            logger.info(f"Added/updated peer {addr} with encryption key")
+        elif not self.udp.has_peer(addr):
             logger.warning(f"update_opponent_ip called without keys for {addr}")
-
-        # Now add peer - encryption will be available
-        if not self.udp.has_peer(addr):
             self.udp.add_peer(addr)
-            logger.info(f"Added peer {addr} - encryption ready")
         else:
-            logger.debug(f"Peer {addr} already exists, keys updated")
+            logger.debug(f"Peer {addr} already exists")
 
     # -----------------------
     # Multicast discovery
@@ -189,23 +195,21 @@ class NetworkManager(EventDispatcher):
         server_ip, server_port = msg.get("addr")
         enemy_name = msg.get("name")
 
-        enc_key = msg.get("enc_key") or msg.get("key")
-        sign_key = msg.get("sign_key", "")
+        key = msg.get("key")
 
-        if not enc_key:
+        if not key:
             logger.warning(f"No encryption key in message from {enemy_name}")
             return
 
         server_addr = (server_ip, server_port)
-        self.update_opponent_ip(server_addr, enc_key, sign_key)
+        self.update_opponent_ip(server_addr, key)
 
         # Send init message
         init_msg = {
             "init": {
                 "ip": self.ip,
                 "port": self.port,
-                "enc_key": self.pub_key,
-                "sign_key": self.sign_key,
+                "enc_key": self.udp.own_public_key,
                 "name": self.me,
             }
         }
@@ -240,11 +244,10 @@ class NetworkManager(EventDispatcher):
                 client_addr = (value.get("ip", addr[0]),
                                value.get("port", addr[1]))
 
-                enc_key = value.get("enc_key") or value.get("key")
-                sign_key = value.get("sign_key", "")
+                key = value.get("enc_key")
 
-                if enc_key:
-                    self.update_opponent_ip(client_addr, enc_key, sign_key)
+                if key:
+                    self.update_opponent_ip(client_addr, key)
 
                 self.dispatch("on_game_init", value)
                 return
