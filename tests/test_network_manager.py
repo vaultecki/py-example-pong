@@ -183,6 +183,13 @@ def test_handle_multicast_message_without_key_is_ignored(nm):
     assert nm.addr_opponent is None
 
 
+@pytest.mark.parametrize("bad_addr", [None, "203.0.113.5", ["203.0.113.5"], ("a", "b", "c")])
+def test_handle_multicast_message_with_malformed_addr_does_not_raise(nm, bad_addr):
+    nm._handle_multicast_message(_multicast_msg(nm, addr=bad_addr))
+
+    assert nm.addr_opponent is None
+
+
 def test_handle_multicast_message_happy_path(nm):
     found = []
     nm.bind(on_opponent_found=lambda inst, msg: found.append(msg))
@@ -235,6 +242,21 @@ def test_handle_udp_data_ignores_unknown_key(nm):
 
 def test_handle_udp_data_invalid_json_does_not_raise(nm):
     nm._handle_udp_data("not json", ("10.0.0.1", 1))
+
+
+@pytest.mark.parametrize("payload", ["[1, 2, 3]", "5", '"just a string"'])
+def test_handle_udp_data_non_object_payload_does_not_raise(nm, payload):
+    nm._handle_udp_data(payload, ("10.0.0.1", 1))
+
+
+def test_handle_udp_data_malformed_init_does_not_raise(nm):
+    inits = []
+    nm.bind(on_game_init=lambda inst, data: inits.append(data))
+
+    nm._handle_udp_data(json.dumps({"init": "not-an-object"}), ("10.0.0.1", 1))
+
+    assert inits == []
+    assert nm.addr_opponent is None
 
 
 def test_handle_udp_data_init_message_updates_opponent_and_dispatches(nm):

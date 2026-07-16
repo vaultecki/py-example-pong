@@ -196,8 +196,13 @@ class NetworkManager(EventDispatcher):
             return
 
         # Extract opponent data
-        server_ip, server_port = msg.get("addr")
+        addr = msg.get("addr")
         enemy_name = msg.get("name")
+
+        if not (isinstance(addr, (list, tuple)) and len(addr) == 2):
+            logger.warning(f"Malformed multicast announcement from {enemy_name}: bad addr {addr!r}")
+            return
+        server_ip, server_port = addr
 
         key = msg.get("key")
 
@@ -242,9 +247,17 @@ class NetworkManager(EventDispatcher):
             logger.error(f"Failed to parse JSON data: {e}")
             return
 
+        if not isinstance(data_dict, dict):
+            logger.warning(f"Ignoring non-object UDP payload from {addr}: {data_dict!r}")
+            return
+
         for key, value in data_dict.items():
 
             if key == "init":
+                if not isinstance(value, dict):
+                    logger.warning(f"Malformed init message from {addr}: {value!r}")
+                    return
+
                 client_addr = (value.get("ip", addr[0]),
                                value.get("port", addr[1]))
 
