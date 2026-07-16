@@ -44,24 +44,19 @@ A peer-to-peer multiplayer Pong game built with Kivy, featuring encrypted UDP co
 
 ### Requirements
 
-- Python 3.8+
+- Python 3.10 - 3.12 (Kivy does not yet ship working wheels for newer versions)
 - Kivy 2.2.0+
 
 ### Install Dependencies
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
 ```
 
-### Requirements File
+For linting, type checking, and running the tests, install the `dev` extra instead:
 
-```
-PyNaCl>=1.5.0
-PySignal>=1.1.1
-psutil>=5.9.8
-Kivy>=2.2.0
-msgpack
-pyzstd
+```bash
+pip install -e ".[dev]"
 ```
 
 ## Project Structure
@@ -70,7 +65,7 @@ pyzstd
 pong/
 ├── main.py                           # Main game logic
 ├── pong.kv                           # Kivy UI definition
-├── requirements.txt
+├── pyproject.toml
 ├── README.md
 └── include/                          # Submodules
     ├── multicast/
