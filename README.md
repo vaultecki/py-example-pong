@@ -1,19 +1,18 @@
-# Networked Pong Game
+# Networked Pong
 
-A peer-to-peer multiplayer Pong game built with Kivy, featuring encrypted UDP communication, automatic peer discovery via multicast, and synchronized gameplay.
+A two-player Pong game built with Kivy. It communicates over encrypted UDP
+and finds opponents via multicast.
 
-## Features
+This project exists mainly to demonstrate two libraries maintained by the
+same author, included as submodules under `include/`:
 
-- 🎮 **Classic Pong Gameplay**: Two-player competitive Pong
-- 🔍 **Automatic Peer Discovery**: Multicast-based opponent finding
-- 🔄 **Synchronized Start**: Both players must be ready before game begins
-- 🎯 **Multiple Control Modes**: Mouse, keyboard, or mixed controls
-- 🚀 **Low Latency**: Compressed, MTU-padded UDP protocol
-- 📊 **Score Tracking**: First to 10 points wins
+- `include/udp` (py-vault-udp): encrypted, rate-limited UDP transport
+- `include/multicast` (py-vault-multicast): multicast-based peer discovery
+
+The game logic itself is intentionally simple; the point is exercising the
+two libraries' APIs in a working, if minimal, application.
 
 ## Architecture
-
-### Network Stack
 
 ```
 ┌─────────────────────────────────────┐
@@ -29,27 +28,28 @@ A peer-to-peer multiplayer Pong game built with Kivy, featuring encrypted UDP co
 └─────────────────────────────────────┘
 ```
 
-### Key Components
+### Components
 
-1. **NetworkManager**: Handles all network communication and events
-2. **VaultUDPSocket**: Encrypted, compressed UDP communication
-3. **VaultMulticast**: Peer discovery via multicast announcements
-4. **Encryption Module**: NaCl SealedBox (anonymous, unauthenticated encryption -- see [Security Considerations](#security-considerations))
+1. **NetworkManager**: wires network events to the game
+2. **VaultUDPSocket**: encrypted, compressed UDP transport
+3. **VaultMulticast**: peer discovery via multicast announcements
+4. **Encryption**: NaCl SealedBox (anonymous, unauthenticated — see
+   [Security Considerations](#security-considerations))
 
 ## Installation
 
 ### Requirements
 
-- Python 3.10 - 3.12 (Kivy does not yet ship working wheels for newer versions)
+- Python 3.10 - 3.12 (Kivy has no working wheels for newer versions yet)
 - Kivy 2.2.0+
 
-### Install Dependencies
+### Install
 
 ```bash
 pip install -e .
 ```
 
-For linting, type checking, and running the tests, install the `dev` extra instead:
+For linting, type checking, and tests, install the `dev` extra instead:
 
 ```bash
 pip install -e ".[dev]"
@@ -59,7 +59,7 @@ pip install -e ".[dev]"
 
 ```
 pong/
-├── main.py                           # Main game logic
+├── main.py                           # Game logic
 ├── pong.kv                           # Kivy UI definition
 ├── pyproject.toml
 ├── README.md
@@ -75,78 +75,51 @@ pong/
 
 ## Usage
 
-### Starting the Game
-
 ```bash
 python main.py
 ```
 
 ### Game Flow
 
-1. **Search Phase**: Game automatically searches for opponents on local network
-   - Status: "Searching for opponent..."
-   
-2. **Connection Phase**: When opponent found, automatic key exchange begins
-   - UDP encryption keys are exchanged
-   - Peer addresses are registered
-   
-3. **Synchronization Phase**: Both players synchronize before start
-   - Status: "Synchronizing..."
-   - Ensures both clients are ready
-   
-4. **Game Start**: After successful sync
-   - Status: "READY!" (briefly)
-   - Game begins, ball starts moving
+1. **Search**: the game looks for an opponent on the local network
+   ("Searching for opponent...")
+2. **Connection**: once a peer is found, keys are exchanged and addresses
+   registered
+3. **Synchronization**: both sides confirm readiness before starting
+   ("Synchronizing...")
+4. **Start**: after sync, the ball starts moving
 
 ### Controls
 
-#### Keyboard Mode
-- `W` / `↑`: Move paddle up
-- `S` / `↓`: Move paddle down
-- `P`: Pause/Resume (after sync)
-- `R`: Reset game (after game over)
+#### Keyboard
+- `W` / `↑`: paddle up
+- `S` / `↓`: paddle down
+- `P`: pause/resume (after sync)
+- `R`: reset (after game over)
 
-#### Mouse Mode
-- Move mouse in your control area to position paddle
-  - Left third of screen: Player 1
-  - Right third of screen: Player 2
+#### Mouse
+- Move the mouse within your control area to position the paddle
+  - Left third of the screen: player 1
+  - Right third of the screen: player 2
 
-#### Mixed Mode (Default)
-- Both keyboard and mouse controls active
+#### Mixed (default)
+Both keyboard and mouse are active at the same time.
 
-### Game Controls (Buttons)
-
-- **Pause/Play**: Toggle game pause
-- **Control Mode**: Cycle through control modes (mix → mouse → keyboard)
-
+#### Buttons
+- **Pause/Play**: toggles pause
+- **Control Mode**: cycles mix → mouse → keyboard
 
 ### Message Types
 
-#### Game Messages (Payload Channel)
-- `score_pl1`, `score_pl2`: Score updates
-- `pad_pos`: Paddle position
-- `ball_vel`, `ball_pos`: Ball state
-- `pause`: Pause state
-- `game_over`: Game end notification
-- `reset_scores`: Score reset
-- `game_close`: Opponent disconnected
+Game messages (payload channel): `score_pl1`, `score_pl2`, `pad_pos`,
+`ball_vel`, `ball_pos`, `pause`, `game_over`, `reset_scores`, `game_close`
 
-#### Control Messages (Control Channel)
-- `init`: Initial connection setup
-- `sync_ready`: Player ready for synchronization
-- `sync_ack`: Synchronization acknowledgment
-- `enc_key`: Public key exchange (sent as part of the `init` message)
-
-### Security Features
-
-1. **Anonymous Encryption**: NaCl SealedBox (X25519 + XSalsa20 + Poly1305) -- see [Security Considerations](#security-considerations) for what this does *not* protect against
-2. **Compression**: zstd for all payloads
-3. **Rate Limiting**: 100 messages/second per peer
-4. **Key Lifecycle**: Automatic key rotation and expiry
+Control messages (control channel): `init`, `sync_ready`, `sync_ack`,
+`enc_key` (sent as part of `init`)
 
 ### Network Discovery
 
-The game uses multicast (224.1.1.1:5004) for peer discovery:
+Peer discovery uses multicast on `224.1.1.1:5004`:
 
 ```python
 {
@@ -159,9 +132,7 @@ The game uses multicast (224.1.1.1:5004) for peer discovery:
 
 ## Configuration
 
-### Game Constants
-
-Edit these in `main.py`:
+### Game constants (in `main.py`)
 
 ```python
 MAX_BALL_SPEED = 38           # Maximum ball velocity
@@ -171,18 +142,18 @@ BALL_START_SPEED = 6          # Initial ball speed
 PADDLE_CONTROL_AREA_FACTOR = 1/3  # Mouse control zone
 ```
 
-### Network Configuration
+### Network defaults (in the `include/udp` and `include/multicast` submodules)
 
 ```python
 DEFAULT_MULTICAST_GROUP = "224.1.1.1"
 DEFAULT_PORT = 5004
-DEFAULT_RATE_LIMIT = 100      # Messages per second
+DEFAULT_RATE_LIMIT = 100      # Messages per second per peer
 DEFAULT_KEY_LIFETIME = 60     # Key lifetime in seconds
 ```
 
 ## Synchronization Protocol
 
-The game uses a 3-way handshake for synchronization:
+A 3-way handshake before the game starts:
 
 ```
 Player A                    Player B
@@ -193,88 +164,62 @@ Player A                    Player B
    ├─── sync_ack ────────────► │
    │ ◄────── sync_ack ──────────┤
    │                           │
-   ✓ GAME STARTS          ✓ GAME STARTS
+   GAME STARTS             GAME STARTS
 ```
 
-This ensures:
-- Both players have stable connections
-- Encryption keys are exchanged
-- Game state is ready on both sides
-- Fair simultaneous start
+This gives both sides a stable connection, exchanged keys, and a
+simultaneous start.
 
-## Game Owner Logic
+## Game Owner
 
-To prevent conflicts, game ownership is determined deterministically:
+Ownership is decided deterministically to avoid conflicts:
 
 ```python
-game_owner = (my_name < enemy_name)  # Lexicographic comparison
+game_owner = (my_name < enemy_name)  # lexicographic comparison
 ```
 
-The game owner:
-- Controls ball physics (authoritative)
-- Sends score updates
-- Handles collision detection
-- Synchronizes ball position
-
-The client:
-- Sends paddle position
-- Receives and displays ball/score state
-- Can pause/unpause locally
+The owner runs ball physics, collision detection, and score updates, and
+sends authoritative state. The other side sends its paddle position,
+applies received state, and can pause/unpause locally.
 
 ## Troubleshooting
 
-### No Opponent Found
+### No opponent found
 
-**Causes**:
-- Firewall blocking multicast (224.1.1.1:5004)
-- Firewall blocking UDP (random ports 2000-20000)
-- Different network segments
+Likely causes: firewall blocking multicast (224.1.1.1:5004) or UDP
+(random ports 2000-20000), or the two instances being on different
+network segments.
 
-**Solutions**:
 ```bash
-# Linux: Allow multicast
+# Linux: allow multicast
 sudo iptables -A INPUT -p udp -d 224.1.1.1 --dport 5004 -j ACCEPT
 
-# Windows: Allow Python through firewall
-# Check Windows Defender Firewall settings
-
-# Check multicast routing
-ip maddr show  # Linux
+# check multicast routing
+ip maddr show
 ```
+
+On Windows, check that Python is allowed through Windows Defender
+Firewall.
 
 ### "No key for address, sending unencrypted"
 
-This is normal during initial discovery. Keys are exchanged after connection.
-
-If it persists:
-- Check that both clients are using the same protocol version
-- Verify encryption keys are being exchanged in init messages
-- Check logs for key exchange errors
+Expected during initial discovery, before keys are exchanged. If it
+persists, check that both clients use the same protocol version and
+check the logs for key-exchange errors.
 
 ### Desynchronization
 
-If game becomes desynchronized:
-- Press `P` to pause on both sides
-- Press `R` to reset
-- Or close and restart both clients
+Press `P` to pause on both sides, then `R` to reset. If that doesn't
+recover, restart both clients.
 
-### High Latency
+### High latency
 
-**Causes**:
-- Network congestion
-- High packet loss
-- CPU load
-
-**Solutions**:
-- Reduce `PADDLE_MOVE_SPEED` for smoother play
-- Check network quality with `ping`
-- Close other network-heavy applications
+Check for network congestion, packet loss, or CPU load. Reducing
+`PADDLE_MOVE_SPEED` can help make lag less noticeable.
 
 ## Development
 
 ### Logging
-
-Enable debug logging:
 
 ```python
 logging.basicConfig(
@@ -283,137 +228,115 @@ logging.basicConfig(
 )
 ```
 
-### Testing Locally
+### Testing locally
 
-Run two instances on the same machine:
+Run two instances on the same machine; they discover each other over
+multicast loopback.
 
 ```bash
-# Terminal 1
-python main.py
-
-# Terminal 2
-python main.py
+python main.py   # terminal 1
+python main.py   # terminal 2
 ```
 
-They will discover each other via multicast loopback.
+Note: multicast does not work in every sandboxed/virtualized environment.
+If discovery hangs in such an environment, that's the network setup, not
+necessarily a code bug — verify on real hardware/network.
 
-### Adding New Message Types
+### Adding a message type
 
-1. Add to `event_map` in `NetworkManager.__init__()`:
+1. Add it to `event_map` in `NetworkManager.__init__()`:
 ```python
 self.event_map = {
     "my_new_message": "on_game_status_update",
 }
 ```
-
-2. Handle in appropriate event handler:
+2. Handle it in the corresponding event handler:
 ```python
 def on_game_status_update(self, instance, data):
     if "my_new_message" in data:
-        # Handle it
-        pass
+        ...
 ```
-
-3. Send from game logic:
+3. Send it from game logic:
 ```python
 msg = {"my_new_message": my_value}
 self.network.send_game_data(msg)
 ```
 
-## Performance
-
-### Optimization Tips
-
-1. **Paddle Updates**: Only sent when position changes
-2. **Ball Updates**: Only sent by game owner
-3. **Compression**: zstd level 16 for all payloads
-4. **MTU Padding**: Prevents packet fragmentation
-
 ## Security Considerations
 
-### Threat Model
+### Threat model
 
 The transport uses NaCl **SealedBox**, which is anonymous, unauthenticated
 encryption: it hides message contents from anyone without the recipient's
-private key, but it does not verify who sent a message.
+private key, but does not verify who sent a message.
 
-**Protected Against**:
-- ✅ Eavesdropping (SealedBox encryption -- an observer without the recipient's private key can't read message contents)
-- ✅ Rate-based DoS (per-peer rate limiting)
+**Covered**:
+- Eavesdropping — SealedBox encryption hides message contents from an
+  observer without the recipient's private key
+- Rate-based DoS from a single peer — per-peer rate limiting
 
-**Not Protected Against**:
-- ❌ Sender spoofing (anyone holding a peer's public key -- which is broadcast openly via multicast -- can send that peer validly-encrypted messages; there is no way to verify who actually sent a given message)
-- ❌ Replay attacks (no nonce/timestamp tracking -- a captured ciphertext can be resent later and will decrypt successfully again)
-- ❌ Man-in-the-middle during key exchange (public keys are exchanged in the clear on first contact with no signing or verification; an attacker present from the start of a session could substitute their own key unnoticed)
-- ❌ Network-level DoS (use firewall)
-- ❌ Physical access to machine
-- ❌ Compromised Python environment
+**Not covered**:
+- Sender spoofing — anyone holding a peer's public key (broadcast openly
+  via multicast) can send that peer validly-encrypted messages; there is
+  no way to verify the actual sender
+- Replay attacks — no nonce/timestamp tracking, so a captured ciphertext
+  can be resent later and will decrypt again
+- Man-in-the-middle during key exchange — public keys are exchanged in
+  the clear on first contact with no signing or verification
+- Network-level DoS, physical access to the machine, or a compromised
+  Python environment
 
-Given all of this, treat the game as suitable for a trusted LAN among people
-who already trust each other -- not as a hardened protocol for hostile
+Given this, treat the game as suitable for a trusted LAN among people who
+already trust each other, not as a hardened protocol for hostile
 networks.
 
-### Best Practices
+### Practices
 
-1. Run on trusted networks only
-2. Keep dependencies updated
-3. Use firewall to restrict UDP ports
-4. Monitor logs for suspicious activity
+- Run on trusted networks only
+- Keep dependencies updated
+- Restrict UDP ports via firewall if exposed beyond a LAN
 
 ## License
 
-Copyright [2025] [ecki]
-
-Licensed under the Apache License, Version 2.0
+Copyright 2025 ecki. Licensed under the Apache License, Version 2.0.
 
 ## Contributing
 
-This is a personal project, but suggestions are welcome via issues.
+This is a personal project; suggestions are welcome via issues.
 
-### Code Style
-
-- PEP 8 compliance
-- Type hints where beneficial
-- Docstrings for public methods
-- Logging for debugging
+Code style: PEP 8, type hints where useful, logging over print for
+diagnostics.
 
 ## Credits
 
-**Author**: ecki
+Author: ecki
 
-**Technologies**:
-- [Kivy](https://kivy.org/) - UI framework
-- [PyNaCl](https://pynacl.readthedocs.io/) - Cryptography
-- [msgpack](https://msgpack.org/) - Serialization
-- [zstd](https://facebook.github.io/zstd/) - Compression
+Dependencies: [Kivy](https://kivy.org/), [PyNaCl](https://pynacl.readthedocs.io/),
+[msgpack](https://msgpack.org/), [zstd](https://facebook.github.io/zstd/)
 
 ## Changelog
 
-### Version 2.1 (Current)
-- Switched the transport to NaCl SealedBox (anonymous, unauthenticated encryption -- see [Security Considerations](#security-considerations))
+### 2.1 (current)
+- Switched the transport to NaCl SealedBox (anonymous, unauthenticated —
+  see [Security Considerations](#security-considerations))
 - Added ruff/mypy/pytest tooling and CI for the main game code
-- Fixed a reconnect bug where rejoining a game would schedule the update loop multiple times
-- Fixed the ball not re-serving on a peer that didn't trigger a score reset
+- Fixed a reconnect bug where rejoining a game scheduled the update loop
+  multiple times
+- Fixed the ball not re-serving on a peer that didn't trigger a score
+  reset
 
-### Version 2.0
-- Upgraded to Protocol v2 with structured format
-- Added synchronization phase before game start
+### 2.0
+- Structured protocol v2
+- Added a synchronization phase before game start
 - Deterministic game owner selection
-- Improved key exchange with signatures
-- Enhanced replay attack prevention
-- Rate limiting per peer
+- Key exchange with signatures
+- Replay attack mitigation, per-peer rate limiting
 
-### Version 1.0
-- Initial release
-- Basic multiplayer Pong
-- UDP communication
-- Multicast discovery
+### 1.0
+- Initial release: basic multiplayer Pong over UDP with multicast
+  discovery
 
-## Future Ideas
+## Ideas / not done
 
-- [ ] Spectator mode
-- [ ] IPv6 support
-
----
-
-**Enjoy the game! 🏓**
+- Spectator mode
+- IPv6 support
